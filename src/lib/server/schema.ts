@@ -18,7 +18,8 @@ export function openDb(path: string) {
 			duration_ms INTEGER,
 			album_name TEXT,
 			album_image TEXT,
-			release_date TEXT -- 'YYYY', 'YYYY-MM' or 'YYYY-MM-DD' depending on what Spotify knows
+			release_date TEXT, -- 'YYYY', 'YYYY-MM' or 'YYYY-MM-DD' depending on what Spotify knows
+			isrc TEXT -- used to find the song's preview on Deezer
 		);
 
 		-- current liked songs; rebuilt on every sync, tracks stay so playlists keep working after an unlike
@@ -29,9 +30,7 @@ export function openDb(path: string) {
 
 		CREATE TABLE IF NOT EXISTS artists (
 			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			image TEXT,
-			fetched_at TEXT -- null until genres were fetched
+			name TEXT NOT NULL
 		);
 
 		CREATE TABLE IF NOT EXISTS track_artists (
@@ -41,10 +40,33 @@ export function openDb(path: string) {
 			PRIMARY KEY (track_id, artist_id)
 		);
 
-		CREATE TABLE IF NOT EXISTS artist_genres (
-			artist_id TEXT NOT NULL REFERENCES artists(id),
+		-- Spotify no longer returns artist genres for dev-mode apps; genres now come per track from audio analysis
+		DROP TABLE IF EXISTS artist_genres;
+
+		-- written by analyze/analyze.py (Essentia on the Deezer preview + ReccoBeats features)
+		CREATE TABLE IF NOT EXISTS audio (
+			track_id TEXT PRIMARY KEY REFERENCES tracks(id),
+			status TEXT NOT NULL, -- ok | no_match | no_preview | error: ...
+			analyzed_at TEXT NOT NULL,
+			deezer_id INTEGER,
+			bpm REAL,
+			key TEXT, -- e.g. 'C#'
+			scale TEXT, -- major | minor
+			camelot TEXT, -- e.g. '3B', for harmonic mixing
+			energy REAL, -- 0..1, this and below from ReccoBeats when it knows the song
+			valence REAL, -- 0..1, sad -> happy
+			danceability REAL,
+			acousticness REAL,
+			instrumentalness REAL
+		);
+
+		-- top Discogs styles predicted from the audio, e.g. family 'Electronic', genre 'Deep House'
+		CREATE TABLE IF NOT EXISTS track_genres (
+			track_id TEXT NOT NULL REFERENCES tracks(id),
+			family TEXT NOT NULL,
 			genre TEXT NOT NULL,
-			PRIMARY KEY (artist_id, genre)
+			score REAL NOT NULL,
+			PRIMARY KEY (track_id, family, genre)
 		);
 
 		CREATE TABLE IF NOT EXISTS playlists (
@@ -72,6 +94,10 @@ export function openDb(path: string) {
 			substr(added_at, 1, 7) AS month
 		FROM liked;
 	`);
+	// databases created before the isrc column existed
+	if (!db.prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'isrc'").get()) {
+		db.exec('ALTER TABLE tracks ADD COLUMN isrc TEXT');
+	}
 	return db;
 }
 

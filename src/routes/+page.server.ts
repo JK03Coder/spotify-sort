@@ -1,5 +1,5 @@
 import { db } from '#lib/server/db.ts';
-import { likedBy, overview, PERIODS, releaseDecades, topArtists, topGenres, type Period } from '#lib/server/queries.ts';
+import { bpmBuckets, keys, likedBy, overview, PERIODS, releaseDecades, tasteOverTime, topArtists, topGenres, type Period } from '#lib/server/queries.ts';
 import { logout } from '#lib/server/spotify.ts';
 import { startSync, syncStatus } from '#lib/server/sync.ts';
 
@@ -11,9 +11,13 @@ export function load({ url }) {
 		sync: { ...syncStatus },
 		overview: overview(db),
 		liked: likedBy(db, by),
-		genres: topGenres(db),
+		families: topGenres(db, {}, 25, 'family'),
+		genres: topGenres(db, {}, 40),
 		artists: topArtists(db),
-		decades: releaseDecades(db)
+		decades: releaseDecades(db),
+		bpm: bpmBuckets(db),
+		keys: keys(db),
+		taste: tasteOverTime(db, by)
 	};
 }
 

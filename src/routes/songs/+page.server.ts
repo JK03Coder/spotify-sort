@@ -4,13 +4,19 @@ import { addTracks, artistName, createPlaylist, getPlaylist, listPlaylists, song
 
 export function load({ url }) {
 	const p = url.searchParams;
-	const decade = Number.parseInt(p.get('decade') ?? '');
+	const num = (key: string) => {
+		const n = Number.parseFloat(p.get(key) ?? '');
+		return Number.isNaN(n) ? undefined : n;
+	};
 	const filter: Filter = {
 		period: p.get('period') || undefined,
 		genre: p.get('genre') || undefined,
 		artist: p.get('artist') || undefined,
-		decade: Number.isNaN(decade) ? undefined : decade,
-		q: p.get('q') || undefined
+		decade: num('decade'),
+		q: p.get('q') || undefined,
+		bpmMin: num('bpm_min'),
+		bpmMax: num('bpm_max'),
+		key: p.get('key') || undefined
 	};
 	return {
 		filter,

@@ -1,4 +1,4 @@
-import { SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI } from '$app/env/private';
+import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI } from '$app/env/private';
 import { error } from '@sveltejs/kit';
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from './db.ts';
@@ -9,7 +9,7 @@ const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public
 
 type Token = { access_token: string; refresh_token: string; expires_at: number };
 
-// --- login (Authorization Code with PKCE: no client secret, so the repo can be public) ---
+// --- login: Authorization Code with PKCE by default (no secret needed), or the classic client-secret flow when SPOTIFY_CLIENT_SECRET is set ---
 
 export function startLogin() {
 	const verifier = randomBytes(64).toString('base64url');
@@ -21,8 +21,10 @@ export function startLogin() {
 		redirect_uri: SPOTIFY_REDIRECT_URI,
 		scope: SCOPES,
 		state,
-		code_challenge_method: 'S256',
-		code_challenge: createHash('sha256').update(verifier).digest('base64url')
+		...(!SPOTIFY_CLIENT_SECRET && {
+			code_challenge_method: 'S256',
+			code_challenge: createHash('sha256').update(verifier).digest('base64url')
+		})
 	}).toString();
 	return { url: url.toString(), verifier, state };
 }
@@ -30,8 +32,13 @@ export function startLogin() {
 async function tokenRequest(params: Record<string, string>): Promise<Token> {
 	const res = await fetch('https://accounts.spotify.com/api/token', {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: new URLSearchParams({ client_id: SPOTIFY_CLIENT_ID, ...params })
+		headers: {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			...(SPOTIFY_CLIENT_SECRET && {
+				Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64')}`
+			})
+		},
+		body: new URLSearchParams({ ...(!SPOTIFY_CLIENT_SECRET && { client_id: SPOTIFY_CLIENT_ID }), ...params })
 	});
 	if (!res.ok) throw new Error(`Spotify token request failed: ${res.status} ${await res.text()}`);
 	const json = await res.json();
@@ -45,7 +52,12 @@ async function tokenRequest(params: Record<string, string>): Promise<Token> {
 }
 
 export async function finishLogin(code: string, verifier: string) {
-	await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: SPOTIFY_REDIRECT_URI, code_verifier: verifier });
+	await tokenRequest({
+		grant_type: 'authorization_code',
+		code,
+		redirect_uri: SPOTIFY_REDIRECT_URI,
+		...(!SPOTIFY_CLIENT_SECRET && { code_verifier: verifier })
+	});
 	const me = await api<{ id: string; display_name: string | null }>('/me');
 	kvSet(db, 'user', me.display_name || me.id);
 }
@@ -82,7 +94,9 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
 		});
 		if (res.status === 429 && attempt < 5) {
 			const wait = Number(res.headers.get('Retry-After')) || 1;
-			if (wait > 120) throw new Error(`Spotify rate limit: asked to wait ${wait}s, try again later`);
+			if (wait > 120) {
+				throw new Error(`Spotify rate limit: blocked until ${new Date(Date.now() + wait * 1000).toLocaleString()}, try again after that`);
+			}
 			await new Promise((r) => setTimeout(r, wait * 1000));
 			continue;
 		}

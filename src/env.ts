@@ -8,6 +8,10 @@ export const variables = defineEnvVars({
 			return value;
 		}
 	},
+	SPOTIFY_CLIENT_SECRET: {
+		description: 'Optional. When set, login uses the client-secret flow instead of PKCE',
+		schema: (value) => value || undefined
+	},
 	SPOTIFY_REDIRECT_URI: {
 		description: 'Must exactly match a Redirect URI in your Spotify app settings',
 		schema: (value) => value || 'http://127.0.0.1:5173/callback'

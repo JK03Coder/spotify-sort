@@ -31,6 +31,7 @@ export type SavedTrack = {
 		name: string;
 		uri: string;
 		duration_ms: number;
+		external_ids?: { isrc?: string };
 		album: { name: string; release_date: string; images: { url: string }[] };
 		artists: { id: string | null; name: string }[];
 	} | null;
@@ -41,9 +42,10 @@ export function saveLikes(db: Db, items: SavedTrack[]) {
 	tx(db, () => {
 		db.exec('DELETE FROM liked');
 		const track = db.prepare(`
-			INSERT INTO tracks (id, name, uri, duration_ms, album_name, album_image, release_date) VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO tracks (id, name, uri, duration_ms, album_name, album_image, release_date, isrc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET name = excluded.name, uri = excluded.uri, duration_ms = excluded.duration_ms,
-				album_name = excluded.album_name, album_image = excluded.album_image, release_date = excluded.release_date`);
+				album_name = excluded.album_name, album_image = excluded.album_image, release_date = excluded.release_date,
+				isrc = coalesce(excluded.isrc, tracks.isrc)`);
 		const artist = db.prepare('INSERT INTO artists (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name');
 		const clearLinks = db.prepare('DELETE FROM track_artists WHERE track_id = ?');
 		const link = db.prepare('INSERT OR IGNORE INTO track_artists (track_id, artist_id, position) VALUES (?, ?, ?)');
@@ -52,7 +54,7 @@ export function saveLikes(db: Db, items: SavedTrack[]) {
 		for (const { added_at, track: t } of items) {
 			if (!t?.id) continue;
 			// images are widest first; the smallest is plenty for a list thumbnail
-			track.run(t.id, t.name, t.uri, t.duration_ms, t.album.name, t.album.images.at(-1)?.url ?? null, t.album.release_date);
+			track.run(t.id, t.name, t.uri, t.duration_ms, t.album.name, t.album.images.at(-1)?.url ?? null, t.album.release_date, t.external_ids?.isrc ?? null);
 			clearLinks.run(t.id);
 			t.artists.forEach((a, i) => {
 				if (!a.id) return;
@@ -61,21 +63,6 @@ export function saveLikes(db: Db, items: SavedTrack[]) {
 			});
 			like.run(t.id, added_at);
 		}
-	});
-}
-
-export const artistsMissingGenres = (db: Db) =>
-	(db.prepare('SELECT id FROM artists WHERE fetched_at IS NULL').all() as Row[]).map((r) => r.id as string);
-
-export function saveArtist(db: Db, a: { id: string; genres?: string[]; images?: { url: string }[] }) {
-	tx(db, () => {
-		db.prepare("UPDATE artists SET image = ?, fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ') WHERE id = ?").run(
-			a.images?.at(-1)?.url ?? null,
-			a.id
-		);
-		db.prepare('DELETE FROM artist_genres WHERE artist_id = ?').run(a.id);
-		const genre = db.prepare('INSERT OR IGNORE INTO artist_genres (artist_id, genre) VALUES (?, ?)');
-		for (const g of a.genres ?? []) genre.run(a.id, g);
 	});
 }
 
@@ -88,9 +75,10 @@ export const overview = (db: Db) =>
 	db.prepare(`
 		SELECT count(*) AS songs, min(added_at) AS first, max(added_at) AS last,
 			(SELECT count(DISTINCT ta.artist_id) FROM liked l JOIN track_artists ta USING (track_id)) AS artists,
-			(SELECT count(DISTINCT g.genre) FROM liked l JOIN track_artists ta USING (track_id) JOIN artist_genres g USING (artist_id)) AS genres,
-			(SELECT count(*) FROM artists WHERE fetched_at IS NULL) AS artistsPending
-		FROM liked`).get() as { songs: number; first: string | null; last: string | null; artists: number; genres: number; artistsPending: number };
+			(SELECT count(DISTINCT g.genre) FROM liked l JOIN track_genres g USING (track_id)) AS genres,
+			(SELECT count(*) FROM liked l JOIN audio a USING (track_id)) AS analyzed,
+			(SELECT count(*) FROM liked l JOIN audio a USING (track_id) WHERE a.status = 'ok') AS analyzedOk
+		FROM liked`).get() as { songs: number; first: string | null; last: string | null; artists: number; genres: number; analyzed: number; analyzedOk: number };
 
 /** `period` must come from PERIODS: it is interpolated as a column name. */
 export const likedBy = (db: Db, period: Period) =>
@@ -112,9 +100,45 @@ export const releaseDecades = (db: Db) =>
 		WHERE CAST(substr(t.release_date, 1, 4) AS INTEGER) > 0
 		GROUP BY 1 ORDER BY 1`).all() as { decade: number; count: number }[];
 
+export const bpmBuckets = (db: Db) =>
+	db.prepare(`
+		SELECT CAST(a.bpm / 10 AS INTEGER) * 10 AS low, count(*) AS count
+		FROM liked l JOIN audio a USING (track_id) WHERE a.bpm > 0
+		GROUP BY 1 ORDER BY 1`).all() as { low: number; count: number }[];
+
+export const keys = (db: Db) =>
+	db.prepare(`
+		SELECT a.camelot, a.key || ' ' || a.scale AS name, count(*) AS count
+		FROM liked l JOIN audio a USING (track_id) WHERE a.camelot IS NOT NULL
+		GROUP BY 1 ORDER BY CAST(a.camelot AS INTEGER), a.camelot`).all() as { camelot: string; name: string; count: number }[];
+
+/** Per period: song count, average BPM / energy / mood, and the top 3 genres. `period` must come from PERIODS. */
+export function tasteOverTime(db: Db, period: Period) {
+	const rows = db.prepare(`
+		SELECT p.${period} AS label, count(*) AS songs, avg(a.bpm) AS bpm, avg(a.energy) AS energy, avg(a.valence) AS valence
+		FROM liked_periods p LEFT JOIN audio a USING (track_id)
+		GROUP BY 1 ORDER BY 1 DESC`).all() as { label: string; songs: number; bpm: number | null; energy: number | null; valence: number | null }[];
+	const genres = db.prepare(`
+		SELECT label, genre, count FROM (
+			SELECT p.${period} AS label, g.genre, count(DISTINCT p.track_id) AS count,
+				row_number() OVER (PARTITION BY p.${period} ORDER BY count(DISTINCT p.track_id) DESC, g.genre) AS rank
+			FROM liked_periods p JOIN track_genres g USING (track_id) GROUP BY 1, 2
+		) WHERE rank <= 3 ORDER BY count DESC`).all() as { label: string; genre: string; count: number }[];
+	return rows.map((r) => ({ ...r, genres: genres.filter((g) => g.label === r.label) }));
+}
+
 // --- filtered song lists ---
 
-export type Filter = { period?: string; genre?: string; artist?: string; decade?: number; q?: string };
+export type Filter = {
+	period?: string;
+	genre?: string; // matches a genre or a whole family
+	artist?: string;
+	decade?: number;
+	q?: string;
+	bpmMin?: number;
+	bpmMax?: number; // exclusive
+	key?: string; // Camelot, e.g. '8A'
+};
 
 function where(f: Filter) {
 	const clauses: string[] = [];
@@ -124,7 +148,7 @@ function where(f: Filter) {
 		params.period = f.period;
 	}
 	if (f.genre) {
-		clauses.push('EXISTS (SELECT 1 FROM track_artists x JOIN artist_genres g USING (artist_id) WHERE x.track_id = t.id AND g.genre = :genre)');
+		clauses.push('EXISTS (SELECT 1 FROM track_genres g WHERE g.track_id = t.id AND (g.genre = :genre OR g.family = :genre))');
 		params.genre = f.genre;
 	}
 	if (f.artist) {
@@ -140,28 +164,56 @@ function where(f: Filter) {
 			SELECT 1 FROM track_artists x JOIN artists a ON a.id = x.artist_id WHERE x.track_id = t.id AND a.name LIKE :q))`);
 		params.q = `%${f.q}%`;
 	}
+	if (f.bpmMin !== undefined) {
+		clauses.push('au.bpm >= :bpmMin');
+		params.bpmMin = f.bpmMin;
+	}
+	if (f.bpmMax !== undefined) {
+		clauses.push('au.bpm < :bpmMax');
+		params.bpmMax = f.bpmMax;
+	}
+	if (f.key) {
+		clauses.push('au.camelot = :key');
+		params.key = f.key;
+	}
 	return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
 }
 
-const LIKED_FROM = 'FROM liked_periods p JOIN tracks t ON t.id = p.track_id';
+const LIKED_FROM = 'FROM liked_periods p JOIN tracks t ON t.id = p.track_id LEFT JOIN audio au ON au.track_id = t.id';
+const TOP_GENRE = '(SELECT g.genre FROM track_genres g WHERE g.track_id = t.id ORDER BY g.score DESC LIMIT 1) AS genre';
 const ARTIST_NAMES = `(SELECT group_concat(a.name, ', ' ORDER BY x.position)
 	FROM track_artists x JOIN artists a ON a.id = x.artist_id WHERE x.track_id = t.id) AS artists`;
 
-export type Song = { id: string; name: string; album_name: string; album_image: string | null; release_date: string; added_at: string; artists: string };
+export type Song = {
+	id: string;
+	name: string;
+	album_name: string;
+	album_image: string | null;
+	release_date: string;
+	added_at: string;
+	artists: string;
+	bpm: number | null;
+	key: string | null;
+	scale: string | null;
+	camelot: string | null;
+	genre: string | null;
+};
 
 export function songs(db: Db, f: Filter) {
 	const w = where(f);
 	return db.prepare(`
-		SELECT t.id, t.name, t.album_name, t.album_image, t.release_date, p.added_at, ${ARTIST_NAMES}
+		SELECT t.id, t.name, t.album_name, t.album_image, t.release_date, p.added_at, ${ARTIST_NAMES},
+			au.bpm, au.key, au.scale, au.camelot, ${TOP_GENRE}
 		${LIKED_FROM} ${w.sql} ORDER BY p.added_at DESC`).all(w.params) as Song[];
 }
 
-/** Top genres among the liked songs matching `f` (all liked songs when `f` is empty). */
-export function topGenres(db: Db, f: Filter = {}, limit = 25) {
+/** Songs per genre (or per family) among the liked songs matching `f`. A song can have up to 3 genres. */
+export function topGenres(db: Db, f: Filter = {}, limit = 25, level: 'genre' | 'family' = 'genre') {
 	const w = where(f);
+	const col = level === 'family' ? 'g.family' : 'g.genre';
 	return db.prepare(`
-		SELECT g.genre AS label, count(DISTINCT t.id) AS count
-		${LIKED_FROM} JOIN track_artists ta ON ta.track_id = t.id JOIN artist_genres g ON g.artist_id = ta.artist_id
+		SELECT ${col} AS label, count(DISTINCT t.id) AS count
+		${LIKED_FROM} JOIN track_genres g ON g.track_id = t.id
 		${w.sql} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ${Number(limit)}`).all(w.params) as { label: string; count: number }[];
 }
 
@@ -222,8 +274,10 @@ export const deletePlaylist = (db: Db, id: number) => db.prepare('DELETE FROM pl
 
 export function playlistSongs(db: Db, id: number) {
 	return db.prepare(`
-		SELECT t.id, t.name, t.uri, t.album_name, t.album_image, t.release_date, l.added_at, ${ARTIST_NAMES}
+		SELECT t.id, t.name, t.uri, t.album_name, t.album_image, t.release_date, l.added_at, ${ARTIST_NAMES},
+			au.bpm, au.key, au.scale, au.camelot, ${TOP_GENRE}
 		FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id LEFT JOIN liked l ON l.track_id = t.id
+		LEFT JOIN audio au ON au.track_id = t.id
 		WHERE pt.playlist_id = ? ORDER BY pt.position`).all(id) as (Song & { uri: string })[];
 }
 

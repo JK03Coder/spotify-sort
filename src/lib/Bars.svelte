@@ -1,5 +1,6 @@
 <script lang="ts">
-	let { rows }: { rows: { label: string; count: number; href: string }[] } = $props();
+	let { rows, empty = 'Nothing yet, run a sync first.' }: { rows: { label: string; count: number; href: string }[]; empty?: string } =
+		$props();
 	let max = $derived(Math.max(1, ...rows.map((r) => r.count)));
 </script>
 
@@ -13,7 +14,7 @@
 			</a>
 		</li>
 	{:else}
-		<li class="muted">Nothing yet, run a sync first.</li>
+		<li class="muted">{empty}</li>
 	{/each}
 </ul>
 

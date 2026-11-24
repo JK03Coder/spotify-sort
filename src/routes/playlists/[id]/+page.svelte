@@ -49,7 +49,7 @@
 <form method="POST" action="?/remove" use:enhance>
 	<table>
 		<thead>
-			<tr><th></th><th></th><th>Song</th><th>Album</th><th>Released</th><th>Liked</th></tr>
+			<tr><th></th><th></th><th>Song</th><th>Genre</th><th>BPM</th><th>Key</th><th>Released</th><th>Liked</th></tr>
 		</thead>
 		<tbody>
 			{#each data.songs as s (s.id)}
@@ -57,7 +57,9 @@
 					<td><input type="checkbox" name="track" value={s.id} aria-label="Select {s.name}" /></td>
 					<td>{#if s.album_image}<img src={s.album_image} alt="" loading="lazy" />{/if}</td>
 					<td>{s.name}<div class="muted">{s.artists}</div></td>
-					<td class="muted">{s.album_name}</td>
+					<td class="muted">{s.genre ?? ''}</td>
+					<td class="muted">{s.bpm ? Math.round(s.bpm) : ''}</td>
+					<td class="muted" title={s.key ? `${s.key} ${s.scale}` : ''}>{s.camelot ?? ''}</td>
 					<td class="muted">{s.release_date}</td>
 					<td class="muted">{s.added_at ? new Date(s.added_at).toLocaleDateString() : 'unliked'}</td>
 				</tr>

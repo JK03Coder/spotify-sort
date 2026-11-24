@@ -22,8 +22,15 @@ function seed() {
 		track('t3', '2023-04-01T10:00:00Z', '1999-12', [['a2', 'Beta']]),
 		{ added_at: '2023-05-01T00:00:00Z', track: { ...track('local', '', '', []).track, id: null } }
 	]);
-	q.saveArtist(db, { id: 'a1', genres: ['rock', 'indie'] });
-	q.saveArtist(db, { id: 'a2', genres: ['indie'] });
+	// what analyze/analyze.py writes
+	const audio = db.prepare("INSERT INTO audio (track_id, status, analyzed_at, bpm, camelot, energy) VALUES (?, 'ok', 'now', ?, ?, ?)");
+	audio.run('t1', 124.6, '8A', 0.8);
+	audio.run('t2', 95, '3B', null);
+	const genre = db.prepare('INSERT INTO track_genres (track_id, family, genre, score) VALUES (?, ?, ?, ?)');
+	genre.run('t1', 'Rock', 'Indie Rock', 0.6);
+	genre.run('t1', 'Electronic', 'House', 0.2);
+	genre.run('t2', 'Rock', 'Indie Rock', 0.5);
+	genre.run('t3', 'Electronic', 'Deep House', 0.7);
 	return db;
 }
 
@@ -38,18 +45,48 @@ describe('stats queries', () => {
 		expect(q.likedBy(db, 'month').map((r) => r.label)).toEqual(['2023-01', '2023-03', '2023-04']);
 	});
 
-	it('counts each song once per genre, overall and within a filter', () => {
+	it('counts songs per genre and family, overall and within a filter', () => {
 		const db = seed();
 		expect(q.topGenres(db)).toEqual([
-			{ label: 'indie', count: 3 },
-			{ label: 'rock', count: 2 }
+			{ label: 'Indie Rock', count: 2 },
+			{ label: 'Deep House', count: 1 },
+			{ label: 'House', count: 1 }
 		]);
-		expect(q.topGenres(db, { period: '2023-Q2' })).toEqual([{ label: 'indie', count: 1 }]);
+		expect(q.topGenres(db, {}, 25, 'family')).toEqual([
+			{ label: 'Electronic', count: 2 },
+			{ label: 'Rock', count: 2 }
+		]);
+		expect(q.topGenres(db, { period: '2023-Q2' })).toEqual([{ label: 'Deep House', count: 1 }]);
+	});
+
+	it('summarises BPM, keys and taste per period', () => {
+		const db = seed();
+		expect(q.bpmBuckets(db)).toEqual([
+			{ low: 90, count: 1 },
+			{ low: 120, count: 1 }
+		]);
+		expect(q.tasteOverTime(db, 'quarter')).toEqual([
+			{ label: '2023-Q2', songs: 1, bpm: null, energy: null, valence: null, genres: [{ label: '2023-Q2', genre: 'Deep House', count: 1 }] },
+			{
+				label: '2023-Q1',
+				songs: 2,
+				bpm: (124.6 + 95) / 2,
+				energy: 0.8,
+				valence: null,
+				genres: [
+					{ label: '2023-Q1', genre: 'Indie Rock', count: 2 },
+					{ label: '2023-Q1', genre: 'House', count: 1 }
+				]
+			}
+		]);
 	});
 
 	it('filters songs and keeps artist order', () => {
 		const db = seed();
-		expect(q.songs(db, { period: '2023-Q1', genre: 'rock' }).map((s) => s.id)).toEqual(['t2', 't1']);
+		expect(q.songs(db, { period: '2023-Q1', genre: 'Rock' }).map((s) => s.id)).toEqual(['t2', 't1']); // family
+		expect(q.songs(db, { genre: 'House' }).map((s) => s.id)).toEqual(['t1']); // exact genre, not Deep House
+		expect(q.songs(db, { bpmMin: 120, bpmMax: 130 }).map((s) => s.id)).toEqual(['t1']);
+		expect(q.songs(db, { key: '3B' })[0]).toMatchObject({ id: 't2', genre: 'Indie Rock', bpm: 95 });
 		expect(q.songs(db, { decade: 1990 }).map((s) => s.id)).toEqual(['t3', 't1']);
 		expect(q.songs(db, { q: 'beta' }).map((s) => s.id)).toEqual(['t3', 't2']);
 		expect(q.songs(db, { artist: 'a2' })[1]).toMatchObject({ id: 't2', artists: 'Alpha, Beta', album_image: 'small' });

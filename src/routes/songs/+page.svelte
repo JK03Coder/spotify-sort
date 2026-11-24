@@ -31,7 +31,10 @@
 			['genre', data.filter.genre],
 			['artist', data.artistName ?? data.filter.artist],
 			['decade', data.filter.decade !== undefined ? `${data.filter.decade}s` : undefined],
-			['q', data.filter.q && `“${data.filter.q}”`]
+			['q', data.filter.q && `“${data.filter.q}”`],
+			['bpm_min', data.filter.bpmMin !== undefined ? `≥ ${data.filter.bpmMin} BPM` : undefined],
+			['bpm_max', data.filter.bpmMax !== undefined ? `< ${data.filter.bpmMax} BPM` : undefined],
+			['key', data.filter.key]
 		].filter(([, v]) => v) as [string, string][]
 	);
 	const suggestedName = $derived(activeFilters.map(([, v]) => v).join(' · ') || 'All liked songs');
@@ -42,6 +45,9 @@
 	<input name="period" placeholder="2023, 2023-Q3 or 2023-07" value={data.filter.period ?? ''} size="18" />
 	<input name="genre" placeholder="Genre" value={data.filter.genre ?? ''} />
 	<input name="decade" placeholder="Decade e.g. 1990" value={data.filter.decade ?? ''} size="12" />
+	<input name="bpm_min" placeholder="BPM from" value={data.filter.bpmMin ?? ''} size="7" />
+	<input name="bpm_max" placeholder="BPM to" value={data.filter.bpmMax ?? ''} size="7" />
+	<input name="key" placeholder="Key e.g. 8A" value={data.filter.key ?? ''} size="8" />
 	{#if data.filter.artist}<input type="hidden" name="artist" value={data.filter.artist} />{/if}
 	<button>Filter</button>
 	<a href="/songs" class="muted">Clear</a>
@@ -84,7 +90,7 @@
 
 	<table>
 		<thead>
-			<tr><th></th><th></th><th>Song</th><th>Album</th><th>Released</th><th>Liked</th></tr>
+			<tr><th></th><th></th><th>Song</th><th>Genre</th><th>BPM</th><th>Key</th><th>Released</th><th>Liked</th></tr>
 		</thead>
 		<tbody>
 			{#each data.songs as s (s.id)}
@@ -92,12 +98,14 @@
 					<td><input type="checkbox" name="track" value={s.id} checked aria-label="Select {s.name}" /></td>
 					<td>{#if s.album_image}<img src={s.album_image} alt="" loading="lazy" />{/if}</td>
 					<td>{s.name}<div class="muted">{s.artists}</div></td>
-					<td class="muted">{s.album_name}</td>
+					<td class="muted">{s.genre ?? ''}</td>
+					<td class="muted">{s.bpm ? Math.round(s.bpm) : ''}</td>
+					<td class="muted" title={s.key ? `${s.key} ${s.scale}` : ''}>{s.camelot ?? ''}</td>
 					<td class="muted">{s.release_date}</td>
 					<td class="muted">{new Date(s.added_at).toLocaleDateString()}</td>
 				</tr>
 			{:else}
-				<tr><td colspan="6" class="muted">No songs match. Synced yet? Check the Stats page.</td></tr>
+				<tr><td colspan="8" class="muted">No songs match. Synced yet? Check the Stats page.</td></tr>
 			{/each}
 		</tbody>
 	</table>
