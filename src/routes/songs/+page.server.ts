@@ -1,6 +1,25 @@
-import { fail, redirect } from '@sveltejs/kit';
+import { fail } from '@sveltejs/kit';
 import { db } from '#lib/server/db.ts';
-import { addTracks, artistName, createPlaylist, getPlaylist, listPlaylists, songs, topGenres, type Filter } from '#lib/server/queries.ts';
+import {
+	addTracks,
+	artistName,
+	clearGenre,
+	createPlaylist,
+	genreChoices,
+	getPlaylist,
+	keys,
+	likedBy,
+	listPlaylists,
+	NO_GENRE,
+	noGenreCount,
+	playlistMemberships,
+	rejectGenre,
+	releaseDecades,
+	setGenre,
+	songs,
+	topGenres,
+	type Filter
+} from '#lib/server/queries.ts';
 
 export function load({ url }) {
 	const p = url.searchParams;
@@ -23,30 +42,65 @@ export function load({ url }) {
 		artistName: filter.artist ? artistName(db, filter.artist) : undefined,
 		songs: songs(db, filter),
 		genres: topGenres(db, filter, 20),
-		playlists: listPlaylists(db)
+		playlists: listPlaylists(db),
+		memberships: playlistMemberships(db),
+		// options for the filter dropdowns
+		options: {
+			families: topGenres(db, {}, 100, 'family'),
+			genres: topGenres(db, {}, 1000),
+			noGenre: noGenreCount(db),
+			genreChoices: genreChoices(db),
+			decades: releaseDecades(db),
+			keys: keys(db),
+			periods: (['year', 'quarter', 'month'] as const).map((by) => ({
+				heading: `${by[0].toUpperCase()}${by.slice(1)}s`,
+				options: likedBy(db, by).map((r) => ({ value: r.label, count: r.count })).reverse()
+			}))
+		}
 	};
 }
 
-function selectedTracks(form: FormData) {
-	return form.getAll('track').map(String);
-}
-
 export const actions = {
-	create: async ({ request }) => {
-		const form = await request.formData();
-		const name = String(form.get('name') ?? '').trim();
-		const tracks = selectedTracks(form);
-		if (!name) return fail(400, { message: 'Give the playlist a name' });
-		if (!tracks.length) return fail(400, { message: 'Select at least one song' });
-		redirect(303, `/playlists/${createPlaylist(db, name, tracks)}`);
-	},
+	// one action for both "new playlist" and "existing playlist" so the page can stay put afterwards
 	add: async ({ request }) => {
 		const form = await request.formData();
-		const id = Number(form.get('playlist'));
-		const tracks = selectedTracks(form);
-		if (!getPlaylist(db, id)) return fail(400, { message: 'Pick a playlist' });
+		const tracks = form.getAll('track').map(String);
 		if (!tracks.length) return fail(400, { message: 'Select at least one song' });
-		addTracks(db, id, tracks);
-		redirect(303, `/playlists/${id}`);
+
+		const target = String(form.get('target') ?? 'new');
+		if (target === 'new') {
+			const name = String(form.get('name') ?? '').trim();
+			if (!name) return fail(400, { message: 'Give the new playlist a name' });
+			const id = createPlaylist(db, name, tracks);
+			return { added: tracks.length, skipped: 0, playlist: { id, name, created: true } };
+		}
+
+		const playlist = getPlaylist(db, Number(target));
+		if (!playlist) return fail(400, { message: 'That playlist no longer exists' });
+		const added = addTracks(db, playlist.id, tracks);
+		return { added, skipped: tracks.length - added, playlist: { id: playlist.id, name: playlist.name, created: false } };
+	},
+	setGenre: async ({ request }) => {
+		const form = await request.formData();
+		const tracks = form.getAll('track').map(String);
+		const input = String(form.get('genre') ?? '').trim();
+		if (!tracks.length) return fail(400, { message: 'Select the songs to change' });
+		try {
+			return { genreSet: { count: tracks.length, ...setGenre(db, tracks, input) } };
+		} catch (e) {
+			return fail(400, { message: (e as Error).message });
+		}
+	},
+	// "not this genre": the genre filtered on (the action URL keeps the filters), else each song's current genre
+	rejectGenre: async ({ request, url }) => {
+		const tracks = (await request.formData()).getAll('track').map(String);
+		if (!tracks.length) return fail(400, { message: 'Select the songs to change' });
+		const filtered = url.searchParams.get('genre');
+		const genre = filtered && filtered !== NO_GENRE ? filtered : undefined;
+		return { genreRejected: { genre, ...rejectGenre(db, tracks, genre) } };
+	},
+	resetGenre: async ({ request }) => {
+		const tracks = (await request.formData()).getAll('track').map(String);
+		return { genreReset: clearGenre(db, tracks) };
 	}
 };

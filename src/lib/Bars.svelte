@@ -1,57 +1,27 @@
 <script lang="ts">
-	let { rows, empty = 'Nothing yet, run a sync first.' }: { rows: { label: string; count: number; href: string }[]; empty?: string } =
-		$props();
+	let {
+		rows,
+		empty = 'Nothing yet, run a sync first.',
+		color = 'var(--chart-1)'
+	}: { rows: { label: string; count: number; href: string }[]; empty?: string; color?: string } = $props();
 	let max = $derived(Math.max(1, ...rows.map((r) => r.count)));
 </script>
 
-<ul>
+<ul class="-mx-2 max-h-96 overflow-y-auto">
 	{#each rows as r (r.label)}
 		<li>
-			<a href={r.href}>
-				<span class="label">{r.label}</span>
-				<span class="bar"><span style:width="{(r.count / max) * 100}%"></span></span>
-				<span class="count">{r.count}</span>
+			<a
+				href={r.href}
+				class="grid grid-cols-[minmax(6rem,40%)_1fr_3rem] items-center gap-3 rounded-md px-2 py-1 text-sm transition-colors hover:bg-muted"
+			>
+				<span class="truncate">{r.label}</span>
+				<span class="h-2 overflow-hidden rounded-full bg-muted">
+					<span class="block h-full rounded-full" style:width="{(r.count / max) * 100}%" style:background={color}></span>
+				</span>
+				<span class="text-right text-muted-foreground tabular-nums">{r.count}</span>
 			</a>
 		</li>
 	{:else}
-		<li class="muted">{empty}</li>
+		<li class="px-2 text-sm text-muted-foreground">{empty}</li>
 	{/each}
 </ul>
-
-<style>
-	ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		max-height: 420px;
-		overflow-y: auto;
-	}
-	a {
-		display: grid;
-		grid-template-columns: minmax(90px, 40%) 1fr 3.5em;
-		gap: 0.5rem;
-		align-items: center;
-		padding: 0.15rem 0.25rem;
-		border-radius: 4px;
-		text-decoration: none;
-	}
-	a:hover {
-		background: var(--line);
-	}
-	.label {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.bar span {
-		display: block;
-		height: 0.7rem;
-		border-radius: 3px;
-		background: var(--accent);
-	}
-	.count {
-		text-align: right;
-		font-variant-numeric: tabular-nums;
-		color: var(--muted);
-	}
-</style>

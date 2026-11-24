@@ -92,10 +92,51 @@ describe('stats queries', () => {
 		expect(q.songs(db, { artist: 'a2' })[1]).toMatchObject({ id: 't2', artists: 'Alpha, Beta', album_image: 'small' });
 	});
 
+	it('lets a manual genre override the analyzed ones, and reverts', () => {
+		const db = seed();
+		expect(q.setGenre(db, ['t1'], 'Deep House')).toEqual({ family: 'Electronic', genre: 'Deep House' }); // family looked up
+		expect(q.setGenre(db, ['t1'], 'deep house')).toEqual({ family: 'Electronic', genre: 'Deep House' }); // case-insensitive, keeps spelling
+		expect(q.setGenre(db, ['t2'], 'Funk / Soul > Neo Soul')).toEqual({ family: 'Funk / Soul', genre: 'Neo Soul' });
+		expect(q.setGenre(db, ['t3'], 'Footwork')).toEqual({ family: 'Other', genre: 'Footwork' }); // unknown genre
+		expect(q.songs(db, { genre: 'Indie Rock' })).toEqual([]); // analyzed genres are hidden while overridden
+		expect(q.songs(db, { genre: 'Electronic' }).map((s) => s.id)).toEqual(['t1']);
+		expect(q.songs(db, { genre: 'Deep House' })[0]).toMatchObject({ id: 't1', genre: 'Deep House', manual: 1 });
+		expect(q.clearGenre(db, ['t1', 't2', 't3', 't1'])).toBe(3);
+		expect(q.songs(db, { genre: 'Indie Rock' }).map((s) => s.id)).toEqual(['t2', 't1']);
+		expect(() => q.setGenre(db, ['t1'], 'Rock > ')).toThrow('Type a genre');
+	});
+
+	it('rules out a genre so the next-best one shows, and lists songs left with none', () => {
+		const db = seed();
+		expect(q.rejectGenre(db, ['t1', 't3'], 'Indie Rock')).toEqual({ count: 2, noGenre: 0 });
+		expect(q.songs(db, { genre: 'Indie Rock' }).map((s) => s.id)).toEqual(['t2']);
+		expect(q.songs(db, { genre: 'House' })[0]).toMatchObject({ id: 't1', genre: 'House', manual: 1 });
+		expect(q.rejectGenre(db, ['t3'])).toEqual({ count: 1, noGenre: 1 }); // its current genre, Deep House
+		expect(q.songs(db, { genre: q.NO_GENRE }).map((s) => s.id)).toEqual(['t3']);
+		expect(q.noGenreCount(db)).toBe(1);
+		q.setGenre(db, ['t2'], 'Rock > Punk');
+		q.rejectGenre(db, ['t2'], 'Rock'); // a family also drops the manual genre in it
+		expect(q.songs(db, { genre: 'Rock' })).toEqual([]);
+		expect(q.clearGenre(db, ['t1', 't2', 't3'])).toBe(3);
+		expect(q.noGenreCount(db)).toBe(0);
+	});
+
+	it('keeps regional genres only for artists from that region, once countries are known', () => {
+		const db = seed();
+		db.prepare("INSERT INTO track_genres VALUES ('t2', 'Pop', 'K-pop', 0.9), ('t3', 'Pop', 'K-pop', 0.9)").run();
+		expect(q.songs(db, { genre: 'K-pop' })).toHaveLength(2); // countries unknown: keep
+		db.exec("UPDATE artists SET country = 'US' WHERE id = 'a2'");
+		expect(q.songs(db, { genre: 'K-pop' })).toEqual([]);
+		expect(q.songs(db, { genre: 'Indie Rock' }).find((s) => s.id === 't2')?.genre).toBe('Indie Rock'); // falls back
+		db.exec("UPDATE artists SET country = 'KR' WHERE id = 'a1'"); // t2 is a collab with a Korean artist
+		expect(q.songs(db, { genre: 'K-pop' }).map((s) => s.id)).toEqual(['t2']);
+	});
+
 	it('appends playlist tracks without duplicates and tracks push state', () => {
 		const db = seed();
 		const id = q.createPlaylist(db, 'Mix', ['t1', 't2']);
-		q.addTracks(db, id, ['t2', 't3']);
+		expect(q.addTracks(db, id, ['t2', 't3'])).toBe(1); // t2 was already there
+		expect(q.playlistMemberships(db)).toHaveLength(3);
 		expect(q.playlistSongs(db, id).map((s) => s.id)).toEqual(['t1', 't2', 't3']);
 		q.markSynced(db, id);
 		expect(q.getPlaylist(db, id)!.synced_at).toBe(q.getPlaylist(db, id)!.updated_at);

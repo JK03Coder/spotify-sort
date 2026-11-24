@@ -16,15 +16,26 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run && python3 analyze/test_analyze.py",
-		"analyze": "uv run analyze/analyze.py"
+		"analyze": "uv run analyze/analyze.py",
+		"artists": "python3 analyze/artists.py"
 	},
 	"devDependencies": {
+		"@fontsource-variable/geist": "^5.3.0",
+		"@internationalized/date": "^3.12.4",
+		"@lucide/svelte": "^1.79.0",
 		"@sveltejs/adapter-node": "^6.0.2",
 		"@sveltejs/kit": "^3.2.0",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@tailwindcss/vite": "^4.3.5",
 		"@types/node": "^24",
+		"bits-ui": "^2.22.0",
+		"cn": "^0.5.2",
+		"shadcn-svelte": "^1.8.1",
 		"svelte": "^5.57.3",
 		"svelte-check": "^4.7.8",
+		"tailwind-variants": "^3.3.1",
+		"tailwindcss": "^4.3.5",
+		"tw-animate-css": "^1.4.0",
 		"typescript": "^6.0.3",
 		"vite": "^8.3.8",
 		"vitest": "^5.1.0"

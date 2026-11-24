@@ -12,6 +12,8 @@ song. Results go into the app's SQLite database. Safe to stop and re-run: it res
     npm run analyze                 # everything not analyzed yet
     npm run analyze -- --limit 20   # try a few first
     npm run analyze -- --retry      # also retry songs that had no match / no preview / errors
+
+Afterwards it looks up artist countries on MusicBrainz for regional genres like K-pop (see artists.py).
 """
 
 import argparse
@@ -155,6 +157,7 @@ def main():
         {f'LIMIT {int(args.limit)}' if args.limit else ''}""").fetchall()
     if not tracks:
         print("Everything is analyzed already. Use --retry to retry failed songs.")
+        artist_countries(db)
         return
     tracks = [dict(t) for t in tracks]
 
@@ -237,6 +240,13 @@ def main():
                 print(f"{i}/{len(tracks)}  {counts}  ~{eta:.0f} min left", flush=True)
             if kind == "error":
                 print(f"  {t['name']}: {status}", file=sys.stderr)
+    artist_countries(db)
+
+
+def artist_countries(db):
+    from artists import update_countries  # lazy: artists.py imports this module
+
+    update_countries(db)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,149 @@
+@import 'tailwindcss';
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* follow the OS light/dark setting, no toggle needed */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/*
+ * Theme: warm paper + ink with an electric violet accent (light), deep violet-black (dark).
+ * Every shadcn component reads these tokens, so this block is the one place to restyle the app.
+ */
+:root {
+	--radius: 0.75rem;
+
+	--background: oklch(0.985 0.004 85);
+	--foreground: oklch(0.21 0.02 285);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.21 0.02 285);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.21 0.02 285);
+
+	--primary: oklch(0.52 0.22 292);
+	--primary-foreground: oklch(0.985 0.01 292);
+	--secondary: oklch(0.955 0.015 292);
+	--secondary-foreground: oklch(0.32 0.09 292);
+	--muted: oklch(0.955 0.006 85);
+	--muted-foreground: oklch(0.5 0.015 285);
+	--accent: oklch(0.94 0.035 292);
+	--accent-foreground: oklch(0.3 0.1 292);
+	--destructive: oklch(0.58 0.22 25);
+
+	--border: oklch(0.91 0.008 85);
+	--input: oklch(0.88 0.01 85);
+	--ring: oklch(0.6 0.18 292);
+
+	/* bars and genre families */
+	--chart-1: oklch(0.56 0.21 292); /* violet */
+	--chart-2: oklch(0.68 0.17 35); /* coral */
+	--chart-3: oklch(0.64 0.12 185); /* teal */
+	--chart-4: oklch(0.77 0.15 75); /* amber */
+	--chart-5: oklch(0.62 0.14 245); /* sky */
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--background: oklch(0.16 0.015 285);
+		--foreground: oklch(0.96 0.006 285);
+		--card: oklch(0.2 0.018 285);
+		--card-foreground: oklch(0.96 0.006 285);
+		--popover: oklch(0.22 0.02 285);
+		--popover-foreground: oklch(0.96 0.006 285);
+
+		--primary: oklch(0.74 0.15 292);
+		--primary-foreground: oklch(0.18 0.04 292);
+		--secondary: oklch(0.27 0.035 292);
+		--secondary-foreground: oklch(0.93 0.02 292);
+		--muted: oklch(0.25 0.015 285);
+		--muted-foreground: oklch(0.72 0.015 285);
+		--accent: oklch(0.3 0.06 292);
+		--accent-foreground: oklch(0.95 0.02 292);
+		--destructive: oklch(0.7 0.19 22);
+
+		--border: oklch(1 0 0 / 9%);
+		--input: oklch(1 0 0 / 14%);
+		--ring: oklch(0.66 0.15 292);
+
+		--chart-1: oklch(0.74 0.15 292);
+		--chart-2: oklch(0.75 0.14 35);
+		--chart-3: oklch(0.74 0.11 185);
+		--chart-4: oklch(0.82 0.13 75);
+		--chart-5: oklch(0.72 0.12 245);
+	}
+}
+
+@theme inline {
+	--font-sans: 'Geist Variable', sans-serif;
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground antialiased;
+		/* a faint violet glow at the top so the page isn't flat */
+		background-image: radial-gradient(70rem 28rem at 50% -12rem, color-mix(in oklch, var(--primary) 10%, transparent), transparent);
+		background-repeat: no-repeat;
+	}
+	html {
+		@apply font-sans;
+		font-feature-settings: 'ss01', 'cv11';
+	}
+	::selection {
+		background: color-mix(in oklch, var(--primary) 25%, transparent);
+	}
+	h1,
+	h2,
+	h3 {
+		@apply tracking-tight;
+	}
+}
+
+@layer components {
+	/* native checkbox drawn like the shadcn Checkbox: the song tables have ~1800 rows, too many for a component each */
+	.check {
+		@apply size-4 shrink-0 cursor-pointer appearance-none rounded-[4px] border border-input bg-center bg-no-repeat align-middle transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30;
+		background-size: 0.875rem;
+	}
+	.check:checked {
+		@apply border-primary bg-primary;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fbfaff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+	}
+	@media (prefers-color-scheme: dark) {
+		.check:checked {
+			background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231c1528' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+		}
+	}
+}

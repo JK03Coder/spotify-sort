@@ -1,3 +1,4 @@
+import { NO_GENRE } from '../genres.ts';
 import type { Db } from './schema.ts';
 
 type Row = Record<string, any>;
@@ -75,7 +76,7 @@ export const overview = (db: Db) =>
 	db.prepare(`
 		SELECT count(*) AS songs, min(added_at) AS first, max(added_at) AS last,
 			(SELECT count(DISTINCT ta.artist_id) FROM liked l JOIN track_artists ta USING (track_id)) AS artists,
-			(SELECT count(DISTINCT g.genre) FROM liked l JOIN track_genres g USING (track_id)) AS genres,
+			(SELECT count(DISTINCT g.genre) FROM liked l JOIN song_genres g USING (track_id)) AS genres,
 			(SELECT count(*) FROM liked l JOIN audio a USING (track_id)) AS analyzed,
 			(SELECT count(*) FROM liked l JOIN audio a USING (track_id) WHERE a.status = 'ok') AS analyzedOk
 		FROM liked`).get() as { songs: number; first: string | null; last: string | null; artists: number; genres: number; analyzed: number; analyzedOk: number };
@@ -122,12 +123,14 @@ export function tasteOverTime(db: Db, period: Period) {
 		SELECT label, genre, count FROM (
 			SELECT p.${period} AS label, g.genre, count(DISTINCT p.track_id) AS count,
 				row_number() OVER (PARTITION BY p.${period} ORDER BY count(DISTINCT p.track_id) DESC, g.genre) AS rank
-			FROM liked_periods p JOIN track_genres g USING (track_id) GROUP BY 1, 2
+			FROM liked_periods p JOIN song_genres g USING (track_id) GROUP BY 1, 2
 		) WHERE rank <= 3 ORDER BY count DESC`).all() as { label: string; genre: string; count: number }[];
 	return rows.map((r) => ({ ...r, genres: genres.filter((g) => g.label === r.label) }));
 }
 
 // --- filtered song lists ---
+
+export { NO_GENRE };
 
 export type Filter = {
 	period?: string;
@@ -147,8 +150,10 @@ function where(f: Filter) {
 		clauses.push('(p.year = :period OR p.quarter = :period OR p.month = :period)');
 		params.period = f.period;
 	}
-	if (f.genre) {
-		clauses.push('EXISTS (SELECT 1 FROM track_genres g WHERE g.track_id = t.id AND (g.genre = :genre OR g.family = :genre))');
+	if (f.genre === NO_GENRE) {
+		clauses.push('NOT EXISTS (SELECT 1 FROM song_genres g WHERE g.track_id = t.id)');
+	} else if (f.genre) {
+		clauses.push('EXISTS (SELECT 1 FROM song_genres g WHERE g.track_id = t.id AND (g.genre = :genre OR g.family = :genre))');
 		params.genre = f.genre;
 	}
 	if (f.artist) {
@@ -180,7 +185,9 @@ function where(f: Filter) {
 }
 
 const LIKED_FROM = 'FROM liked_periods p JOIN tracks t ON t.id = p.track_id LEFT JOIN audio au ON au.track_id = t.id';
-const TOP_GENRE = '(SELECT g.genre FROM track_genres g WHERE g.track_id = t.id ORDER BY g.score DESC LIMIT 1) AS genre';
+const TOP_GENRE = `(SELECT g.genre FROM song_genres g WHERE g.track_id = t.id ORDER BY g.score DESC LIMIT 1) AS genre,
+	(EXISTS (SELECT 1 FROM genre_overrides o WHERE o.track_id = t.id)
+		OR EXISTS (SELECT 1 FROM genre_rejections r WHERE r.track_id = t.id)) AS manual`;
 const ARTIST_NAMES = `(SELECT group_concat(a.name, ', ' ORDER BY x.position)
 	FROM track_artists x JOIN artists a ON a.id = x.artist_id WHERE x.track_id = t.id) AS artists`;
 
@@ -197,6 +204,7 @@ export type Song = {
 	scale: string | null;
 	camelot: string | null;
 	genre: string | null;
+	manual: number; // 1 when the genre was set or ruled out by hand
 };
 
 export function songs(db: Db, f: Filter) {
@@ -213,12 +221,80 @@ export function topGenres(db: Db, f: Filter = {}, limit = 25, level: 'genre' | '
 	const col = level === 'family' ? 'g.family' : 'g.genre';
 	return db.prepare(`
 		SELECT ${col} AS label, count(DISTINCT t.id) AS count
-		${LIKED_FROM} JOIN track_genres g ON g.track_id = t.id
+		${LIKED_FROM} JOIN song_genres g ON g.track_id = t.id
 		${w.sql} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ${Number(limit)}`).all(w.params) as { label: string; count: number }[];
 }
 
 export const artistName = (db: Db, id: string) =>
 	(db.prepare('SELECT name FROM artists WHERE id = ?').get(id) as Row | undefined)?.name as string | undefined;
+
+// --- manual genres ---
+
+/**
+ * Sets the genre of `trackIds` by hand. `input` is 'Family > Genre', or just a genre name, in which case
+ * the family is taken from songs that already have that genre ('Other' when it's new).
+ */
+export function setGenre(db: Db, trackIds: string[], input: string) {
+	const sep = input.indexOf('>');
+	let family = sep >= 0 ? input.slice(0, sep).trim() : '';
+	let genre = (sep >= 0 ? input.slice(sep + 1) : input).trim();
+	if (!genre) throw new Error('Type a genre');
+	if (!family) {
+		// reuse an existing genre's family and spelling ("deep house" -> Electronic > Deep House)
+		const known = db
+			.prepare('SELECT family, genre FROM song_genres WHERE genre = ? COLLATE NOCASE GROUP BY family, genre ORDER BY count(*) DESC LIMIT 1')
+			.get(genre) as { family: string; genre: string } | undefined;
+		family = known?.family ?? 'Other';
+		genre = known?.genre ?? genre;
+	}
+	tx(db, () => {
+		const set = db.prepare('INSERT OR REPLACE INTO genre_overrides (track_id, family, genre) VALUES (?, ?, ?)');
+		for (const t of trackIds) set.run(t, family, genre);
+	});
+	return { family, genre };
+}
+
+/** 'Family > Genre' for every genre in use, most common first (suggestions for setGenre). */
+export const genreChoices = (db: Db) =>
+	(db.prepare("SELECT family || ' > ' || genre AS label FROM song_genres GROUP BY family, genre ORDER BY count(*) DESC").all() as Row[]).map(
+		(r) => r.label as string
+	);
+
+/**
+ * "These songs are not `genre`" (a genre or family; default: each song's current top genre). The songs fall back
+ * to their next-best analyzed genre. Returns how many songs changed and how many are left with no genre.
+ */
+export function rejectGenre(db: Db, trackIds: string[], genre?: string) {
+	const top = db.prepare('SELECT genre FROM song_genres WHERE track_id = ? ORDER BY score DESC LIMIT 1');
+	const reject = db.prepare('INSERT OR IGNORE INTO genre_rejections (track_id, genre) VALUES (?, ?)');
+	const unset = db.prepare('DELETE FROM genre_overrides WHERE track_id = ? AND ? IN (genre, family)');
+	const none = db.prepare('SELECT NOT EXISTS (SELECT 1 FROM song_genres WHERE track_id = ?) AS none');
+	return tx(db, () => {
+		let count = 0;
+		for (const t of trackIds) {
+			const g = genre ?? ((top.get(t) as Row | undefined)?.genre as string | undefined);
+			if (!g) continue;
+			reject.run(t, g);
+			unset.run(t, g);
+			count++;
+		}
+		const noGenre = trackIds.filter((t) => (none.get(t) as Row).none).length;
+		return { count, noGenre };
+	});
+}
+
+/** Back to the analyzed genres: drops manual genres and ruled-out genres. Returns how many songs changed. */
+export function clearGenre(db: Db, trackIds: string[]) {
+	return tx(db, () => {
+		const del = db.prepare('DELETE FROM genre_overrides WHERE track_id = ?');
+		const unreject = db.prepare('DELETE FROM genre_rejections WHERE track_id = ?');
+		return trackIds.filter((t) => Number(del.run(t).changes) + Number(unreject.run(t).changes) > 0).length;
+	});
+}
+
+/** Liked songs without any genre (not analyzed, or every genre ruled out). */
+export const noGenreCount = (db: Db) =>
+	(db.prepare(`SELECT count(*) AS n ${LIKED_FROM} ${where({ genre: NO_GENRE }).sql}`).get() as Row).n as number;
 
 // --- local playlists ---
 
@@ -242,12 +318,14 @@ export const listPlaylists = (db: Db) =>
 export const getPlaylist = (db: Db, id: number) =>
 	db.prepare(`SELECT ${PLAYLIST_COLS} FROM playlists p WHERE p.id = ?`).get(id) as Playlist | undefined;
 
+/** Appends tracks, skipping ones already in the playlist. Returns how many were actually added. */
 export function addTracks(db: Db, playlistId: number, trackIds: string[]) {
-	tx(db, () => {
+	return tx(db, () => {
 		const max = (db.prepare('SELECT coalesce(max(position), -1) AS m FROM playlist_tracks WHERE playlist_id = ?').get(playlistId) as Row).m as number;
 		const add = db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)');
-		trackIds.forEach((t, i) => add.run(playlistId, t, max + 1 + i));
+		const added = trackIds.reduce((n, t, i) => n + Number(add.run(playlistId, t, max + 1 + i).changes), 0);
 		touch(db, playlistId);
+		return added;
 	});
 }
 
@@ -269,6 +347,9 @@ export function updatePlaylist(db: Db, id: number, name: string, description: st
 	db.prepare('UPDATE playlists SET name = ?, description = ? WHERE id = ?').run(name, description, id);
 	touch(db, id);
 }
+
+export const playlistMemberships = (db: Db) =>
+	db.prepare('SELECT playlist_id, track_id FROM playlist_tracks').all() as { playlist_id: number; track_id: string }[];
 
 export const deletePlaylist = (db: Db, id: number) => db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
 
